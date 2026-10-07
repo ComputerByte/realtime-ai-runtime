@@ -1,14 +1,20 @@
 # Realtime AI Runtime Reference
 
-A compact reference implementation of a realtime AI application runtime demonstrating event-driven cognition, persistent SQLite memory, provider abstraction, WebSocket communication, bounded tool execution, observability, and deterministic testing.
+A compact public implementation of core realtime AI runtime patterns: event-driven cognition and orchestration, durable SQLite memory, isolated providers, bounded tools, WebSocket communication, correlated observability, and deterministic testing.
 
-**Start here:** run the offline demo, then read [`src/runtime/runtime.ts`](src/runtime/runtime.ts). The request path is intentionally small enough to understand in 5–10 minutes.
+**Deterministic offline demo · real SQLite persistence · real WebSocket integration tests · no API key required**
 
-This is an independent public reference implementation, not the production Vex system. It contains no production code, prompts, memory policy, integrations, or compatibility layer. Its scope makes no claim to represent the complexity of a production AI character system.
+Transport, model calls, memory, tools, and logging each have different responsibilities. This runtime keeps them separate so the provider remains replaceable while state, capability execution, event ordering, and observability stay application-controlled. The complete demo and runtime tests run without a live model API.
+
+Implemented independently of production Vex, this reference makes those architectural ideas available to explore without exposing production code, prompts, integrations, memory policy, or compatibility logic. It does not recreate or represent the full complexity of that system.
+
+**Start here:** [Two-minute walkthrough](#two-minute-walkthrough) · [Runtime path](src/runtime/runtime.ts) · [Verification](#verification)
 
 ## Quick start
 
 Requires **Node.js 24+** (built-in SQLite) and **pnpm 11**. No API key, Docker, or external service is required.
+
+The [`.nvmrc`](.nvmrc) selects Node 24; with nvm, run `nvm install && nvm use`. [`package.json`](package.json) pins pnpm 11.19.0.
 
 ```bash
 pnpm install
@@ -28,10 +34,10 @@ Open [http://127.0.0.1:3000](http://127.0.0.1:3000). `GET /health` returns runti
 
 ## Two-minute walkthrough
 
-1. Send **“What can this runtime do?”**. Watch `chat.received → cognition.started → memory.read → cognition.completed → response.completed` appear. Expand an event to inspect its correlation ID and sanitized metadata.
+1. Send **“What can this runtime do?”**. Watch `chat.received → cognition.started → memory.read → cognition.completed → response.completed` appear (newest first in the UI). Expand an event to inspect its correlation ID and sanitized metadata.
 2. Send **“Remember that the project codename is Orion.”**. A deterministic application rule stores the explicit fact in SQLite; the memory panel updates. The provider cannot write memory.
 3. Click **New session**. The conversation clears and the session ID changes, while the saved fact remains. Ask **“What is the project codename?”**. Nova answers **Orion**. Restart the server and ask again to verify durability.
-4. Send **“What is 843 * 27?”**. The provider proposes `calculator`, validated input executes, and the result **22761** returns. `tool.requested` and `tool.completed` expose the capability boundary.
+4. Send **“What is 843 * 27?”**. The provider proposes `calculator`; the application validates its name and input before execution, then returns **22761**. `tool.requested` and `tool.completed` make that gate visible.
 
 The fake provider recognizes these examples, simple two-operand arithmetic, and questions about the previous message. It is a deterministic demo adapter, not a general language model. Explicit facts use **`Remember that [the] <key> is <value>.`**; the optional final period is punctuation. Keys normalize to lowercase, and repeat writes update the same fact.
 
@@ -43,7 +49,8 @@ flowchart TD
     Server --> Runtime[Runtime: ordered events and session context]
     Runtime --> Cognition[Simple cognition boundary]
     Cognition --> Provider[Provider interface: fake or optional API]
-    Cognition --> Memory[Explicit facts / bounded retrieval]
+    Cognition -->|Read bounded facts| Memory[SQLite memory store]
+    Runtime -->|Explicit user-directed writes| Memory
     Memory --> SQLite[(SQLite: facts and sanitized events)]
     Runtime -->|Persist before publishing| SQLite
     Provider -->|Response or one tool proposal| Runtime
@@ -57,13 +64,15 @@ There is no generalized event bus. The runtime is an explicit sequence of operat
 
 **Two kinds of state:** recent conversation exists only in RAM (12 messages per session); explicit facts persist in SQLite (32 facts, bounded key/value lengths). New sessions clear the first and retain the second. Sanitized lifecycle events also persist, independently of conversation content.
 
-**One capability:** the calculator takes `{ left, operator, right }`, with finite operands bounded to ±10¹² and an operator in `+ - * /`. No expression evaluation. At most one tool per request; its result becomes a deterministic final response, with no recursive model loop.
+**One capability:** the calculator takes `{ left, operator, right }`, with finite operands bounded to ±10¹² and an operator in `+ - * /`. No expression evaluation. At most one tool proposal per request; its result becomes a deterministic final response, with no recursive model/tool loop.
 
 ## Developer UI
 
-The interface shows conversation, connection/provider/session status, sanitized lifecycle events, and persistent facts. Event metadata excludes messages, raw prompts, memory values, provider errors, and credentials. Chat replies and facts are separate UI packets; they are not copied into logs or the event table.
+The interface shows conversation, connection/provider/session status, sanitized lifecycle events, and persistent facts. Event metadata excludes messages, raw prompts, memory values, raw provider errors, and credentials; calculator results remain visible. Chat replies and facts are separate UI packets; they are not copied into logs or the event table.
 
-![Developer UI showing durable memory recall and a calculator turn](docs/screenshot.png)
+![Developer UI showing codename recall, calculator output, correlated events, and persisted facts](docs/screenshot.png)
+
+*Offline demo: project codename recall, calculator result 22761, and correlated lifecycle events.*
 
 <!-- Screenshot placeholder for future UI changes: replace docs/screenshot.png after the demo steps. -->
 
@@ -85,6 +94,8 @@ docs/                     Architecture and security boundaries
 
 ## Verification
 
+The suite exercises application behavior and failure boundaries without a live API, using temporary or in-memory SQLite databases and real local WebSocket connections.
+
 ```bash
 pnpm test
 pnpm typecheck
@@ -92,19 +103,23 @@ pnpm lint
 pnpm build
 ```
 
-Tests exercise deterministic fake responses, provider failure and timeout, correlated event order, explicit writes and recall after session reset/database reopen, context limits, input validation, unknown tools, tool timeout/failure, actual WebSocket frames, malformed clients, origin/host restrictions, and frame/rate limits. Tests use temporary or in-memory SQLite databases; there is no API dependency.
+- **Runtime and providers** — [runtime tests](tests/runtime.test.ts) and [adapter tests](tests/provider.test.ts): deterministic fake responses, provider failure/timeout, correlated event ordering, concurrent-turn rejection, and bounded recent context.
+- **Durable state** — [runtime integration tests](tests/runtime.test.ts): explicit writes, recall after a new session, facts and events surviving database reopen, upserts, and fact limits.
+- **Capabilities** — [calculator tests](tests/tools.test.ts): input validation, unknown-tool rejection, arithmetic results, execution failure, and timeout.
+- **Transport** — [WebSocket integration tests](tests/server.test.ts): real frames through calculator and memory paths, malformed clients, origin/Host restrictions, and frame/rate limits.
 
 ## Optional provider
 
 Copy `.env.example` to `.env`, set `PROVIDER=openai`, and provide your own HTTPS `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODEL`. Node loads `.env`; inherited variables take precedence. The endpoint must support chat completions and JSON object responses. No model or commercial endpoint is hard-coded. Only the optional provider adapter performs configured HTTP requests; the model cannot choose the destination.
 
-Provider requests have a 10-second deadline; output is schema-checked and capped at 64 KiB. Redirects are rejected. Facts and bounded conversation are sent to the configured provider, so use only demo data. Real-provider compatibility requires manual verification against the chosen service; automated tests use simulated HTTP responses.
+The runtime gives provider calls a 10-second deadline and validates generation results. The optional adapter caps HTTP response bodies at 64 KiB and rejects redirects. Facts and bounded conversation are sent to the configured provider, so use only demo data. Live-provider compatibility requires manual verification against the chosen service; adapter tests use simulated HTTP responses.
 
 ## Design and security boundaries
 
-- No model shell, filesystem, browser, arbitrary HTTP, process execution, or dynamic tool loading. Unknown capabilities fail closed.
+- Model output is an untrusted proposal. The application validates generation results, tool names, and strict calculator inputs; unknown or malformed capabilities fail closed. The calculator has a 100 ms asynchronous deadline, which bounds waiting rather than preempting CPU work.
+- No model shell, filesystem, browser, arbitrary HTTP, process execution, or dynamic tool loading. The application accesses SQLite and the configured provider endpoint; those operations are not model capabilities.
 - Memory writes require the explicit application grammar. No inference, summarization, embeddings, reflection, learning, or autonomous extraction.
-- The server accepts local Hosts and same-origin browser WebSockets; it caps connections, input sizes, message rates, and queued socket output.
+- The loopback server validates client actions, local Hosts, and same-origin browser WebSockets. It limits connections, frame/message sizes, and per-connection message rates, and closes slow clients when queued output exceeds its threshold.
 - Logs contain lifecycle metadata and fixed error codes. Provider exceptions are never serialized. The local SQLite file contains intentional demo facts and event metadata and is ignored by Git.
 - This is a single-process local reference. It has no user authentication, tenant isolation, encrypted database, event retention scheduler, streaming tokens, distributed ordering, or production availability guarantees. SQLite's event log grows until you remove the local database; event persistence is not crash recovery or replay machinery.
 
