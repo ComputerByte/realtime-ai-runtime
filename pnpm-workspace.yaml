@@ -1,0 +1,5 @@
+# Explicit build-script allowlist for the TypeScript development runner.
+allowBuilds:
+  esbuild: true
+overrides:
+  shell-quote: 1.11.0
